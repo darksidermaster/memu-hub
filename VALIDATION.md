@@ -1126,6 +1126,44 @@ solve-test --provider anticaptcha
 -> token 2484 chars, P1_eyJhbGciO, 52 s, exit 0
 ```
 
+## 2Captcha: validado end-to-end após liberar o IP
+
+O IP da conta foi liberado no painel. Reexecutado o caminho nativo em Rust:
+
+```
+solve-test --provider 2captcha --balance
+-> saldo: US$ 14.87631
+
+solve-test --provider 2captcha --sitekey ef8c43cb-...
+-> {"provider":"2captcha","token_length":2663,
+    "token_prefix":"P1_eyJhbGciO","expiration":120.0,
+    "elapsed_ms":27727}                                    exit 0
+```
+
+Fluxo completo pelo worker (MEmu com o app aberto, sem socket DevTools):
+
+```
+auto-inject --vm 1 --enable-debug --seconds 60
+-> o Frida habilitou a depuração:
+   socket @webview_devtools_remote_2750 criado, frida-server pid 3180
+   (0 tentativas: o captcha ainda não estava aberto — correto)
+
+auto-inject --vm 1 --seconds 30
+-> stage "injected", attempts 1, passes 1, injections 1
+   "token de 2711 chars injetado em 'MuAwaY' (2 campo(s), 27633 ms)"
+   history: [{provider:"2captcha", elapsed_ms:27633, passed:true,
+              token_length:2711, detail:"pass: true"}]
+
+auto-inject --vm 1 --seconds 20     (execução seguinte)
+-> stage "watching", attempts 0, injections 0
+```
+
+O app voltou para `GameSDLActivity` após a injeção e, na execução seguinte, o
+worker viu o campo de resposta preenchido e **não gastou crédito**.
+
+Os quatro provedores nativos estão agora validados end-to-end: NoneCap,
+2Captcha, AntiCaptcha e Onyx.
+
 ## Não validado
 
 - Injeção em múltiplos emuladores reais simultâneos (o fluxo `inject_captcha_all`

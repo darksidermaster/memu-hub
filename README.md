@@ -120,7 +120,7 @@ subprocesso. O token é o `P1_...` do hCaptcha.
 | Provedor | Endpoint | Como o token chega | Estado |
 | --- | --- | --- | --- |
 | **NoneCap** | `api.nonecap.com/v1` | `POST /solves` (Bearer), poll até `solved`, token em `solve.token` | validado end-to-end |
-| **2Captcha** | `2captcha.com` | API v1 `in.php`/`res.php` com `method=hcaptcha` | código validado; conta exige liberar IP |
+| **2Captcha** | `2captcha.com` | API v1 `in.php`/`res.php` com `method=hcaptcha` | validado end-to-end |
 | **Anti-Captcha** | `api.anti-captcha.com` | `createTask` (`HCaptchaTaskProxyless`) → `getTaskResult` | validado end-to-end |
 | **Onyx** | `onyxsolver.io` | `POST /api/createTask` (`PopularCaptchaTask`, **exige proxy**) → `/api/getTaskResult` | validado end-to-end |
 
@@ -132,8 +132,9 @@ Detalhes que exigiram trabalho e estão implementados:
 - **Onyx** exige proxy por credencial (`user:pass@host:port`, sem esquema) e sua
   API fica atrás de um WAF que bloqueia o padrão `http://user:pass@127.0.0.1`;
   o cliente envia no formato aceito.
-- **2Captcha** usa `in.php` (v1), que é o caminho do SDK oficial para hCaptcha;
-  a criação de tarefa passa por validação de IP da conta.
+- **2Captcha** usa `in.php` (v1), que é o caminho do SDK oficial para hCaptcha.
+  A conta precisa ter o IP liberado no painel, senão o `in.php` responde
+  `ERROR_IP_NOT_ALLOWED`.
 - **NoneCap** devolve o token direto, sem etapa de imagens.
 - **AntiCaptcha** entrega `solution.gRecaptchaResponse` em ~30–100 s.
 
@@ -424,7 +425,7 @@ teste (MEmu, Android 9, x86_64, root, Chromium 116):
 | Habilitação via Frida | criou `@webview_devtools_remote_<pid>` sem reiniciar o app |
 | Injeção via `AndroidBridge` | token real, `readback_ok`, página fecha após aceitar |
 | NoneCap / AntiCaptcha / Onyx | token `P1_...` real, 14 s / 37 s / 39 s |
-| 2Captcha | chave e saldo OK; criação bloqueada por whitelist de IP da conta |
+| 2Captcha | token `P1_...` real injetado no WebView, 27,6 s |
 | Reinício do app | PID mudou, socket recriado, reconexão automática |
 | Janela do captcha fechada | 0 tentativas, nenhum crédito gasto |
 
@@ -434,7 +435,6 @@ teste (MEmu, Android 9, x86_64, root, Chromium 116):
 - **Um app-alvo por vez** por emulador (`package_name`), embora várias VMs
   possam rodar em paralelo.
 - **Onyx exige proxy.** Sem proxy o provedor recusa; o app avisa antes de tentar.
-- **2Captcha pode exigir liberação de IP** na conta para criar tarefas.
 - A habilitação via Frida depende de `frida-server` compatível; sem ele, use um
   WebView que já exponha socket.
 - **Desafios de vídeo** do hCaptcha não são cobertos por nenhum provedor nativo
