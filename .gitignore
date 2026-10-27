@@ -19,6 +19,7 @@ __pycache__/
 logs/
 *.log
 screenshots/
+.qa-screenshots/
 artifacts/
 .cache/
 

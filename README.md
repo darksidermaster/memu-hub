@@ -111,7 +111,6 @@ preenchidos, `readback_ok`). O app **nunca** declara sucesso sem confirmação.
 - Vault DPAPI (CurrentUser) para a licença e as API-keys no Registro.
 - CSP restritivo, comandos autenticados, HTML escapado.
 - Modo CLI para QA e automação.
-- Modo demonstração de emuladores (sem executar comandos) para explorar a UI.
 
 ## Provedores de captcha
 
@@ -172,6 +171,19 @@ python -m pip install "frida==16.7.19" frida-tools==13.7.1   # opcional
 O executável fica em `src-tauri/target/release/memu-hub.exe`. O PC de destino
 precisa do WebView2 Runtime.
 
+Compilação com autenticação real:
+
+```powershell
+$env:MEMU_HUB_AUTH_URL = 'https://seu-servidor/api/validate'
+npm run build
+```
+
+Compilação de teste, com a chave local habilitada:
+
+```powershell
+cargo build --manifest-path src-tauri/Cargo.toml --features demo-auth
+```
+
 > **Nota deste ambiente.** O `rustc` estoura a pilha ao linkar o binário com
 > debuginfo completo. Por isso `Cargo.toml` define `debug = 0` para o crate do
 > app. Se o build paralelo falhar, use `$env:CARGO_BUILD_JOBS=1`.
@@ -193,7 +205,11 @@ esteja em `/data/local/tmp/frida-server`.
 
 1. Abra o MEmu com o MEmu Hub fechado ou aberto — tanto faz.
 2. Execute `memu-hub.exe` (ou `npm run dev` em desenvolvimento).
-3. Entre com a chave de demonstração `DEMO-2026` (build padrão).
+3. Informe sua chave de autenticação.
+   O build padrão valida a chave em `MEMU_HUB_AUTH_URL` (definido na
+   compilação, HTTPS ou localhost). Para testes locais existe a feature
+   opcional `demo-auth`, que aceita uma chave fixa — ela **não** vem ligada por
+   padrão e não deve ser usada em produção.
 4. A lista mostra os emuladores ativos com PID.
 5. Cadastre uma API-key em **Configurações → + Cadastrar site**.
 6. Ligue o switch **Injetar token** no card do emulador.
@@ -209,7 +225,7 @@ abrir o captcha, o token é obtido e injetado automaticamente.
 │  Instâncias MEmu em execução            │
 │                                         │
 │  ┌───────────────────────────────────┐  │
-│  │ 📱 MEmu1                          │  │
+│  │ [MEmu] MEmu1                       │  │
 │  │    Ativo · PID 3217 · #0          │  │
 │  │    Token injetado · ✓3 · ✕1 · 2s  │  │
 │  │              INJETAR  [ ●]        │  │
@@ -265,7 +281,6 @@ melhora sozinha.
 | `solver_timeout` | timeout da resolução (30–1800 s) |
 | `manual_interval_s` / `manual_solve_s` | tempo médio manual |
 | `use_manual_timing` | libera a pré-resolução com os valores manuais |
-| `demo_emulators` | mostra instâncias de exemplo (não executa comandos) |
 | `sites` / `keys` / `priority` | catálogo, credenciais e ordem de tentativa |
 | `instances` | preferências por índice de VM (apelido, site, switches) |
 

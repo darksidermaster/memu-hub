@@ -42,7 +42,6 @@ struct Settings {
     adb_path: String,
     #[serde(default = "default_package")]
     package_name: String,
-    demo_emulators: bool,
     /// Timeout de uma resolução, em segundos.
     #[serde(default = "default_solver_timeout")]
     solver_timeout: u64,
@@ -66,7 +65,7 @@ fn default_solver_timeout() -> u64 { 180 }
 impl Default for Settings {
     fn default() -> Self {
         Self { memuc_path: String::new(), adb_path: String::new(),
-            package_name: default_package(), demo_emulators: false,
+            package_name: default_package(),
             solver_timeout: default_solver_timeout(),
             manual_interval_s: 0, manual_solve_s: 0, use_manual_timing: false,
             sites: vec![Site { id:"site-a".into(), name:"Site A (exemplo)".into(), icon:"A".into() }, Site { id:"site-b".into(), name:"Site B (exemplo)".into(), icon:"B".into() }],
@@ -78,7 +77,7 @@ struct Vault { key: String, settings: Settings }
 #[derive(Default)]
 struct Session { vault: Vault, authenticated: bool, revision: u64, load_error: Option<String> }
 #[derive(Serialize)]
-struct AuthStatus { authenticated: bool, demo: bool }
+struct AuthStatus { authenticated: bool }
 fn lock<'a>(s: &'a State<'_, Mutex<Session>>) -> Result<std::sync::MutexGuard<'a, Session>> { s.lock().map_err(|_| "Sessão indisponível.".into()) }
 fn persist(v: &Vault) -> Result<()> { vault::write(&serde_json::to_vec(v).map_err(|_| "Configuração inválida.")?) }
 fn authorized(s: &Session) -> Result<()> {
@@ -118,10 +117,8 @@ async fn authenticate(key: Option<String>, state: State<'_, Mutex<Session>>) -> 
         persist(&next)?; s.vault = next; s.authenticated = true;
     }
     s.revision += 1;
-    Ok(AuthStatus { authenticated: valid, demo: cfg!(feature="demo-auth") })
+    Ok(AuthStatus { authenticated: valid })
 }
-#[tauri::command]
-fn is_demo() -> bool { cfg!(feature="demo-auth") }
 #[tauri::command]
 fn logout(state: State<'_, Mutex<Session>>) -> Result<()> {
     let mut s = lock(&state)?;
@@ -219,12 +216,6 @@ fn current_settings(state: &State<'_, Mutex<Session>>) -> Result<Settings> {
     let s = lock(state)?; authorized(&s)?; Ok(s.vault.settings.clone())
 }
 async fn running_vms(settings: &Settings) -> Result<Vec<memu::RunningVm>> {
-    if settings.demo_emulators {
-        return Ok(vec![
-            memu::RunningVm { id: 0, name: "MEmu • exemplo".into(), pid: 12480 },
-            memu::RunningVm { id: 1, name: "MEmu 2 • exemplo".into(), pid: 16832 },
-        ]);
-    }
     let output = memu::run(memu::locate(&settings.memuc_path)?, &["listvms", "--running"]).await?;
     let list = memu::parse_running(&output);
     if list.is_empty() && !output.trim().is_empty() {
@@ -251,22 +242,6 @@ async fn list_sessions(
 ) -> Result<Vec<webview::SessionReport>> {
     let settings = current_settings(&state)?;
     let enable_debug = enable_debug.unwrap_or(false);
-    if settings.demo_emulators {
-        return Ok(vec![
-            webview::SessionReport {
-                vm_id: Some(0), vm_name: "MEmu • exemplo".into(), serial: "127.0.0.1:21503".into(),
-                model: "Exemplo".into(), app_running: false, app_pid: None, socket: None,
-                debug_enabled: false, pages: vec![],
-                error: Some("Instância simulada: nenhum comando foi executado.".into()),
-            },
-            webview::SessionReport {
-                vm_id: Some(1), vm_name: "MEmu 2 • exemplo".into(), serial: "127.0.0.1:21513".into(),
-                model: "Exemplo".into(), app_running: false, app_pid: None, socket: None,
-                debug_enabled: false, pages: vec![],
-                error: Some("Instância simulada: nenhum comando foi executado.".into()),
-            },
-        ]);
-    }
     let vms = running_vms(&settings).await?;
     webview::sessions(
         &settings.adb_path,
@@ -332,9 +307,6 @@ fn start_auto_inject(
     workers: State<'_, Mutex<Workers>>,
 ) -> Result<auto_inject::AutoStatus> {
     let settings = current_settings(&state)?;
-    if settings.demo_emulators {
-        return Err("Instância simulada: nenhuma injeção é executada.".into());
-    }
     let token_source = token_source_for(&settings)?;
     let mut map = workers.lock().map_err(|_| "Estado das verificações indisponível.".to_string())?;
     if let Some(existing) = map.get(&vm_id) {
@@ -416,7 +388,6 @@ fn auto_inject_status(
 #[tauri::command]
 async fn open_android_settings(id: u32, state: State<'_, Mutex<Session>>) -> Result<()> {
     let settings = current_settings(&state)?;
-    if settings.demo_emulators { return Err("Instância simulada: nenhum comando foi executado.".into()); }
     let path = memu::locate(&settings.memuc_path)?;
     let list = memu::parse_list(&memu::run(path.clone(), &["listvms", "--running"]).await?);
     if !list.iter().any(|vm| vm.id==id) { return Err("Esse emulador não está mais ativo.".into()); }
@@ -770,7 +741,7 @@ fn main() {
         .manage(Mutex::new(session))
         .manage(Mutex::new(Workers::new()))
         .invoke_handler(tauri::generate_handler![
-            authenticate, is_demo, logout, get_settings, save_settings,
+            authenticate, logout, get_settings, save_settings,
             list_emulators, list_sessions, start_auto_inject, stop_auto_inject,
             auto_inject_status, set_pre_solve, open_android_settings
         ])

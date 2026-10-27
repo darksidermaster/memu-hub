@@ -2,16 +2,17 @@ const {chromium}=require('playwright');
 const http=require('http'),fs=require('fs'),path=require('path'),os=require('os');
 (async()=>{
  const root=path.resolve(__dirname,'../ui');
+ const shots=path.resolve(__dirname,'../.qa-screenshots');
+ fs.mkdirSync(shots,{recursive:true});
  const server=http.createServer((req,res)=>{const f=path.join(root,req.url==='/'?'index.html':req.url);const mime=f.endsWith('.js')?'application/javascript':f.endsWith('.css')?'text/css':f.endsWith('.svg')?'image/svg+xml':f.endsWith('.webp')?'image/webp':f.endsWith('.png')?'image/png':f.endsWith('.json')?'application/json':'text/html';res.setHeader('Content-Type',mime);res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-src 'none'");try{res.end(fs.readFileSync(f))}catch{res.statusCode=404;res.end()}}).listen(8767,'127.0.0.1');
  const browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:350,height:450}});const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(/Content Security Policy|Refused to/i.test(m.text()))errors.push('CSP: '+m.text())});page.on('requestfailed',r=>{if(/sites\.json|assets\//.test(r.url()))errors.push('requestfailed: '+r.url())});
  await page.addInitScript(()=>{
- const s={memuc_path:'',adb_path:'',package_name:'com.away.game.br',demo_emulators:false,solver_timeout:180,manual_interval_s:0,manual_solve_s:0,use_manual_timing:false,solver_proxy:'',sites:[{id:'a',name:'Site A (exemplo)',icon:'A'},{id:'b',name:'Site B (exemplo)',icon:'B'}],keys:[],priority:[],instances:{}};
+ const s={memuc_path:'',adb_path:'',package_name:'com.away.game.br',solver_timeout:180,manual_interval_s:0,manual_solve_s:0,use_manual_timing:false,solver_proxy:'',sites:[{id:'a',name:'Site A (exemplo)',icon:'A'},{id:'b',name:'Site B (exemplo)',icon:'B'}],keys:[],priority:[],instances:{}};
  let config=s,saved='',injectArgs=null;
  window.__injectCalls=[];window.__autoCalls=[];
  window.__TAURI__={core:{invoke:async(cmd,args)=>{
   switch(cmd){
-   case'is_demo':return true;
-   case'authenticate':if(args.key!==null)saved=args.key;return {authenticated:saved==='DEMO-2026',demo:true};
+   case'authenticate':if(args.key!==null)saved=args.key;return {authenticated:saved==='TEST-KEY'};
    case'get_settings':return structuredClone(config);
    case'save_settings':config=structuredClone(args.settings);return;
    case'list_emulators':return [{id:0,name:'MEmu',pid:1234},{id:1,name:'MEmu 2',pid:4567}];
@@ -46,7 +47,9 @@ const http=require('http'),fs=require('fs'),path=require('path'),os=require('os'
  window.__getInjectArgs=()=>injectArgs;window.__getConfig=()=>config;
  });
  await page.goto('http://127.0.0.1:8767');await page.locator('#license').fill('errada');await page.locator('#login button').click();await page.getByText('Chave inválida.',{exact:false}).waitFor();
- await page.locator('#license').fill('DEMO-2026');await page.locator('#login button').click();await page.locator('.vm').first().waitFor();
+ // App de produção: nenhum aviso de demonstração na tela de login.
+ if(await page.locator('.notice').filter({hasText:'DEMO-2026'}).count())throw Error('aviso de demonstração não deveria existir');
+await page.locator('#license').fill('TEST-KEY');await page.locator('#login button').click();await page.locator('.vm').first().waitFor();
  if(await page.locator('#captcha-all').count())throw Error('botão de injetar em todos deveria ter sido removido');await page.screenshot({path:path.join(os.tmpdir(),'memu-hub-home-qa.png')});
  // A configuração da instância não tem mais Observações nem captcha manual.
  await page.locator('.vm').first().click();
@@ -63,6 +66,11 @@ const http=require('http'),fs=require('fs'),path=require('path'),os=require('os'
  await page.locator('#instance button').click();
  await page.getByText('Instância principal',{exact:true}).waitFor();
  // Switch na lista, ao lado da engrenagem do card.
+ // Card usa o logo do MEmu, não um SVG genérico.
+ const devImg=page.locator('#list .device img').first();
+ if(!await devImg.count())throw Error('card deveria usar o ícone MEMU.png');
+ if(!(await devImg.getAttribute('src')).includes('MEMU.png'))throw Error('ícone do card deveria ser MEMU.png');
+ if(!await devImg.evaluate(img=>img.complete&&img.naturalWidth>0))throw Error('MEMU.png não decodificou');
  const rowSwitch=page.locator('#list .auto-toggle').first();
  if(!await rowSwitch.count())throw Error('switch deveria estar no card do emulador');
  const gearBox=await page.locator('#list .vm').first().boundingBox();
@@ -134,7 +142,7 @@ const http=require('http'),fs=require('fs'),path=require('path'),os=require('os'
  const preSaved=await page.evaluate(()=>Boolean(window.__getConfig().instances[0].pre_solve));
  if(!preSaved)throw Error('estado do switch de pré-resolução não persistiu');
  if(!persisted)throw Error('estado do switch não persistiu na instância');
- await page.screenshot({path:path.join(os.tmpdir(),'memu-hub-auto-qa.png')});
+ await page.screenshot({path:path.join(shots,'auto.png')});
  // O card não pode estourar a largura de 350 nem cortar os rótulos.
  const cardOverflow=await page.evaluate(()=>document.documentElement.scrollWidth>350);
  if(cardOverflow)throw Error('overflow horizontal no card com os switches');
@@ -165,14 +173,14 @@ const http=require('http'),fs=require('fs'),path=require('path'),os=require('os'
  await page.locator('#secret').fill('sonic_test_key');
  await page.locator('#keyform button').click();
  if(await page.locator('.up').count()===0)throw Error('controles de prioridade ausentes');
- await page.screenshot({path:path.join(os.tmpdir(),'memu-hub-settings-qa.png')});
+ await page.screenshot({path:path.join(shots,'settings.png')});
  const beforeRemoval=await page.locator('.key .remove').count();
  await page.locator('.remove').first().click();
  if(await page.locator('.key .remove').count()!==beforeRemoval-1)throw Error('Removal failed');
  // catálogo: cards com ícone -> pede API-key
  await page.locator('#newsite').click();
  await page.locator('.catalog-item').first().waitFor();
- await page.screenshot({path:path.join(os.tmpdir(),'memu-hub-catalog-qa.png')});
+ await page.screenshot({path:path.join(shots,'catalog.png')});
  const cards=await page.locator('.catalog-item').count();
  if(cards<2)throw Error('catálogo deveria listar os sites do sites.json');
  if(!await page.locator('.catalog-item img').first().getAttribute('src').then(s=>s.includes('assets/logos/')))throw Error('ícone do catálogo não renderizou');

@@ -8,7 +8,7 @@
 	"Anti-Captcha": {
 		"icon": ".\\assets\\logos\\Anti-Captcha.ico"
 	},
-	"Onyx": {
-		"icon": "ON"
+	"OnyxSolver": {
+		"icon": ".\\assets\\logos\\Onyx.png"
 	}
 }
