@@ -1,0 +1,17 @@
+{
+  "name": "memu-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build --no-bundle",
+    "build:installer": "tauri build",
+    "test": "node --test tests/*.test.js",
+    "test:ui": "node tests/ui.cjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "playwright": "^1.58.0"
+  }
+}

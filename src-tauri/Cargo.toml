@@ -1,0 +1,25 @@
+[package]
+name = "memu-hub"
+version = "0.1.0"
+edition = "2021"
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["process", "time", "rt-multi-thread", "macros"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tungstenite = "0.30.0"
+ureq = { version = "2.12", features = ["json"] }
+rmpv = { version = "1.3.1", features = ["with-serde"] }
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+[features]
+default = ["demo-auth"]
+demo-auth = []
+
+# Este ambiente estoura a pilha do rustc ao linkar o binário com debuginfo
+# completo; o crate do app usa debuginfo desligado.
+[profile.dev.package.memu-hub]
+debug = 0

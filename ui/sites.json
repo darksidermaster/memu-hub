@@ -1,0 +1,14 @@
+{
+	"NoneCap": {
+		"icon": ".\\assets\\logos\\nonecap.webp"
+	},
+	"2Captcha": {
+		"icon": ".\\assets\\logos\\2captcha.svg"
+	},
+	"Anti-Captcha": {
+		"icon": ".\\assets\\logos\\Anti-Captcha.ico"
+	},
+	"Onyx": {
+		"icon": "ON"
+	}
+}

@@ -1,0 +1,30 @@
+# Dependências e artefatos de build
+node_modules/
+src-tauri/target/
+dist/
+build/
+
+# Segredos e configuração local
+.env
+.env.*
+*.local.json
+settings.json
+
+# Artefatos de pytest e caches
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+# Logs e capturas geradas em runtime
+logs/
+*.log
+screenshots/
+artifacts/
+.cache/
+
+# Sistema operacional e editores
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
