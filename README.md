@@ -122,7 +122,14 @@ subprocesso. O token é o `P1_...` do hCaptcha.
 | **NoneCap** | `api.nonecap.com/v1` | `POST /solves` (Bearer), poll até `solved`, token em `solve.token` | validado end-to-end |
 | **2Captcha** | `2captcha.com` | API v1 `in.php`/`res.php` com `method=hcaptcha` | validado end-to-end |
 | **Anti-Captcha** | `api.anti-captcha.com` | `createTask` (`HCaptchaTaskProxyless`) → `getTaskResult` | validado end-to-end |
+| **NopeCHA** | `api.nopecha.com` | `POST /v1/token/hcaptcha` + poll `GET /v1/token/hcaptcha?id=` | validado end-to-end (**20 créditos/token**) |
 | **Onyx** | `onyxsolver.io` | `POST /api/createTask` (`PopularCaptchaTask`, **exige proxy**) → `/api/getTaskResult` | validado end-to-end |
+
+**Custo do NopeCHA:** `20 créditos` por token de hCaptcha, cobrados no
+submit (antes de o token existir). A página de preços fala em "1 crédito por
+captcha", mas essa regra é da *Recognition API* (imagens); a *Token API* — a que
+este app usa — não publica o preço e cobra por token. Na prática, um plano de
+2000 créditos rende ~100 tokens de hCaptcha por ciclo de 23 h.
 
 O provedor é escolhido pela **ordem de prioridade** configurada. Se um falha, o
 próximo é tentado e o erro final lista o motivo de cada um.
@@ -153,9 +160,31 @@ CaptchaSonic.
 - **MEmu** com Android 9 (testado), depuração USB e **root** habilitados.
 - **ADB** (platform-tools): detectado em `ANDROID_HOME`, `ANDROID_SDK_ROOT`,
   `%LOCALAPPDATA%\Android\Sdk`, instalação do MEmu ou `PATH`.
-- **Frida** apenas se você usar a habilitação automática de depuração:
-  `frida` (Python) e `frida-server` **na mesma versão** — validadas em 16.7.19.
-  A série 17.x removeu o runtime `Java` no servidor deste ambiente.
+- **Frida**: o aplicativo prepara sozinho. Na primeira abertura, antes de pedir
+  a chave, ele detecta `adb`/`frida`, instala `frida-tools` com o pip quando
+  necessário, baixa o `frida-server` na mesma versão do CLI e, se houver um
+  emulador aberto, envia e inicia como root. A série 17.x removeu o runtime
+  `Java` no servidor deste ambiente, por isso a versão fixa é 16.7.19.
+
+### Preparação do ambiente
+
+A tela **Preparação** abre antes do login e mostra o estado de `ADB`, `Frida` e
+`frida-server`, com as etapas executadas. Ela é idempotente: quando tudo já está
+pronto, responde em milissegundos. Falhar numa etapa não impede o login — só
+deixa a depuração via Frida pendente, e **Verificar novamente** refaz a
+preparação.
+
+O `frida` CLI é procurado no `PATH`, em `Scripts` ao lado do Python e nas
+instalações padrão em `%LOCALAPPDATA%\Programs\Python`. O `frida-server` fica em
+`%LOCALAPPDATA%\MEmuHub\tools\frida-server\`, gravado primeiro em arquivo
+temporário e renomeado só quando o download termina.
+
+O comando equivalente fora da interface:
+
+```powershell
+memu-hub.exe setup               # instala o que faltar
+memu-hub.exe setup --no-install  # só verifica o ambiente
+```
 
 ## Instalação
 
@@ -172,13 +201,44 @@ python -m pip install "frida==16.7.19" frida-tools==13.7.1   # opcional
 O executável fica em `src-tauri/target/release/memu-hub.exe`. O PC de destino
 precisa do WebView2 Runtime.
 
-Compilação com autenticação real:
+### Autenticação pelo LicenseHub
+
+As chaves são as **mesmas do Autoloot**: o servidor `license-server` faz a
+ativação por chave + HWID e emite tokens. O app usa o mesmo cálculo de HWID do
+Autoloot (`SHA-256("MachineGuid|serial-do-volume|MuAwaY-Autoloot")`), então uma
+chave já ativada pela DLL abre o MEmu Hub nesta máquina sem nova ativação, e
+vice-versa. Um HWID diferente faz o servidor responder `HWID_MISMATCH`.
+
+O servidor controla **para quais apps** cada chave vale: `memuhub`, `autoloot`
+ou ambos. Uma chave restrita ao outro app responde
+`APP_NOT_ALLOWED` e a tela mostra a mensagem do servidor.
+
+Fluxo:
+
+1. `POST /api/activate` com `{ key, hwid, app }` na primeira vez — vincula o
+   dispositivo e define o vencimento.
+2. `POST /api/refresh` com `{ refresh_token, hwid, app }` nas aberturas
+   seguintes — o refresh token é rotativo e é regravado a cada uso.
+3. Se o refresh token for recusado, a chave salva é usada como fallback; se
+   também for recusada, a mensagem real do servidor aparece na tela.
+
+O tráfego vai em **envelope autenticado** (ECDH P-256 + AES-256-GCM, com
+timestamp e nonce), então o conteúdo não pode ser lido nem forjado por quem
+termina o TLS no meio do caminho. Ver `src-tauri/src/envelope.rs`.
+
+O servidor padrão é `https://rachabuzina.online:8443`. Para outro ambiente:
 
 ```powershell
-$env:MEMU_HUB_AUTH_URL = 'https://seu-servidor/api/validate'
+$env:MEMU_HUB_LICENSE_SERVER = 'https://licencas.seudominio.com'
 npm run build
 ```
 
+O override por variável de ambiente existe para desenvolvimento; o build de
+distribuição usa `--features production-server`, que ignora a variável.
+
+A chave e os tokens ficam no cofre DPAPI do usuário (Registro
+`HKCU\Software\MEmuHub\Vault`), nunca em texto claro. "Sair e esquecer chave de
+acesso" apaga a chave, o refresh token e o access token.
 Compilação de teste, com a chave local habilitada:
 
 ```powershell

@@ -10,6 +10,10 @@
 //!   caminho do SDK oficial para hCaptcha (`method=hcaptcha`).
 //! * **AntiCaptcha** (`https://api.anti-captcha.com`) — `createTask` com
 //!   `HCaptchaTaskProxyless` + `getTaskResult`. Validado end-to-end.
+//! * **NopeCHA** (`https://api.nopecha.com`) — `POST /v1/token/hcaptcha` com
+//!   `type`/`sitekey`/`url` e poll em `GET /v1/token/hcaptcha?id=...`; token em
+//!   `data`. **Validado end-to-end** com token `P1_...` real. Custo medido:
+//!   **20 créditos por resolução** de hCaptcha (ver abaixo).
 //! * **Onyx** (`https://onyxsolver.io`) — `PopularCaptchaTask` (exige proxy) +
 //!   `/api/getTaskResult`. Validado end-to-end.
 //!
@@ -32,6 +36,8 @@ pub enum SolverKind {
     Anticaptcha,
     /// Onyx (`https://onyxsolver.io`, `PopularCaptchaTask`).
     Onyx,
+    /// NopeCHA (`https://api.nopecha.com`, `/v1/token/hcaptcha`).
+    Nopecha,
 }
 
 impl SolverKind {
@@ -41,6 +47,7 @@ impl SolverKind {
             SolverKind::Twocaptcha => "2captcha",
             SolverKind::Anticaptcha => "anticaptcha",
             SolverKind::Onyx => "onyx",
+            SolverKind::Nopecha => "nopecha",
         }
     }
 
@@ -51,6 +58,7 @@ impl SolverKind {
             "2captcha" | "twocaptcha" => Some(SolverKind::Twocaptcha),
             "anticaptcha" | "anti-captcha" => Some(SolverKind::Anticaptcha),
             "onyx" | "onyxsolver" => Some(SolverKind::Onyx),
+            "nopecha" | "nope-cha" => Some(SolverKind::Nopecha),
             _ => None,
         }
     }
@@ -242,6 +250,221 @@ pub fn solve_nonecap(
         })
         .unwrap_or_else(|| format!("não resolvido (status: {})", solve.status));
     Err(format!("NoneCap: {detail}"))
+}
+
+// -- NopeCHA (HTTP puro) ----------------------------------------------------
+//
+// Base: https://api.nopecha.com — autenticação por `Authorization: Basic <key>`.
+//   POST /v1/token/hcaptcha  { type, sitekey, url } -> { data: "<job id>" }
+//   GET  /v1/token/hcaptcha?id=<job>  -> 409 Incomplete job | { data: "P1_..." }
+//   GET  /v1/status                   -> { plan, status, credit, quota, ... }
+//
+// Verificado em campo:
+//   - `/v1/token` sem sufixo devolve HTTP 520 para hCaptcha; é preciso o
+//     endpoint específico `/v1/token/hcaptcha`.
+//   - o poll responde `409 {"error":14,"message":"Incomplete job"}` até ficar
+//     pronto; nesse ponto vem o token.
+//   - hCaptcha não aparece na navegação da API reference pública, embora o
+//     endpoint funcione e a própria API cite `#postHcaptcha` no erro.
+//
+// Validado com token `P1_...` real (2567 a 2626 chars, 18 a 22 s).
+//
+// CUSTO: 20 créditos por token de hCaptcha — **não 1**.
+//
+// Medido em quatro resoluções consecutivas comparando `/v1/status`:
+//   1939 -> 1919, 1919 -> 1899, 1899 -> 1879, 1879 -> 1859  (sempre -20)
+//
+// O desconto é feito **no POST de submit**, antes de o token existir: em um
+// teste isolado, o crédito caiu 20 imediatamente após o submit e não caiu mais
+// na coleta do token (0 adicional). Também aumenta 1 job no histórico.
+//
+// Por que a conta não bate com "2000 captchas/dia": a página de preços diz
+// "One credit processes up to 16 images, which is used to solve one CAPTCHA
+// challenge" — essa regra é da **Recognition API** (classificação de imagens,
+// 1 captcha ≈ 16 recortes). A **Token API**, que é o que este app usa, é
+// cobrada por token entregue, e o preço de um token hCaptcha é 20 créditos.
+// Logo, um plano Starter de 2000 créditos rende ~100 tokens hCaptcha por
+// intervalo de ~23 h, não 2000.
+//
+// Para conferir a qualquer momento: `solve-test --provider nopecha --balance`.
+
+const NOPECHA_BASE: &str = "https://api.nopecha.com";
+
+/// Traduz os erros da NopeCHA (corpo usa `error` numérico + `message`).
+pub fn nopecha_error_hint(code: i64) -> &'static str {
+    match code {
+        9 => "E-mail ou domínio bloqueado; use outra conta.",
+        10 => "Requisição inválida: confira type, sitekey e url.",
+        11 => "A chave expirou ou os créditos acabaram; verifique o plano.",
+        12 => "Feature indisponível no plano atual.",
+        14 => "Trabalho ainda em andamento (continue o poll).",
+        _ => "",
+    }
+}
+
+fn nopecha_request(
+    method: &str,
+    url: &str,
+    api_key: &str,
+    body: Option<serde_json::Value>,
+) -> Result<(u16, serde_json::Value), String> {
+    let auth = format!("Basic {api_key}");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("runtime HTTP: {error}"))?;
+    runtime.block_on(async move {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(45))
+            .build()
+            .map_err(|error| format!("cliente HTTP: {error}"))?;
+        let mut request = match method {
+            "POST" => client.post(url),
+            _ => client.get(url),
+        }
+        .header("Content-Type", "application/json")
+        .header("Authorization", auth);
+        if let Some(payload) = body {
+            request = request.json(&payload);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|error| format!("{method} {url} falhou: {error}"))?;
+        let status = response.status().as_u16();
+        let text = response
+            .text()
+            .await
+            .map_err(|error| format!("resposta ilegível: {error}"))?;
+        let value = serde_json::from_str(&text).unwrap_or_else(|_| {
+            serde_json::json!({ "raw": text.chars().take(200).collect::<String>() })
+        });
+        Ok((status, value))
+    })
+}
+
+/// Consulta plano e créditos (valida a chave sem criar tarefa).
+pub fn nopecha_balance(api_key: &str) -> Result<f64, String> {
+    if api_key.trim().is_empty() {
+        return Err("API-key da NopeCHA vazia.".into());
+    }
+    let (status, value) = nopecha_request(
+        "GET",
+        &format!("{NOPECHA_BASE}/v1/status"),
+        api_key.trim(),
+        None,
+    )?;
+    if status != 200 {
+        return Err(format!("NopeCHA status: HTTP {status} {value}"));
+    }
+    let state = value
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if state != "Active" {
+        return Err(format!("NopeCHA: assinatura '{state}' (esperado Active)."));
+    }
+    let credit = value
+        .get("credit")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    if credit <= 0.0 {
+        return Err("NopeCHA: sem créditos no intervalo atual.".into());
+    }
+    Ok(credit)
+}
+
+/// Resolve hCaptcha pela NopeCHA.
+pub fn solve_nopecha(
+    config: &SolverConfig,
+    credential: &SolverCredential,
+    sitekey: &str,
+    site_url: &str,
+) -> Result<SolverResult, String> {
+    if credential.secret.trim().is_empty() {
+        return Err("API-key da NopeCHA vazia.".into());
+    }
+    let key = credential.secret.trim();
+
+    let (status, created) = nopecha_request(
+        "POST",
+        &format!("{NOPECHA_BASE}/v1/token/hcaptcha"),
+        key,
+        Some(serde_json::json!({
+            "type": "hcaptcha",
+            "sitekey": sitekey,
+            "url": site_url,
+        })),
+    )?;
+    if let Some(error) = created.get("error").and_then(serde_json::Value::as_i64) {
+        let message = created
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("erro");
+        let hint = nopecha_error_hint(error);
+        return Err(format!("NopeCHA createTask: {error} {message} {hint}")
+            .trim()
+            .to_string());
+    }
+    if status != 200 {
+        return Err(format!("NopeCHA createTask: HTTP {status} {created}"));
+    }
+    let job = created
+        .get("data")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or("NopeCHA createTask sem id de trabalho")?
+        .to_string();
+
+    let deadline = Instant::now() + config.timeout;
+    let mut wait = Duration::from_secs(2);
+    loop {
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "NopeCHA não resolveu em {}s (job {job})",
+                config.timeout.as_secs()
+            ));
+        }
+        std::thread::sleep(wait);
+        let (status, result) = nopecha_request(
+            "GET",
+            &format!("{NOPECHA_BASE}/v1/token/hcaptcha?id={job}"),
+            key,
+            None,
+        )?;
+
+        // 409 = ainda processando; corpo traz error 14 "Incomplete job".
+        let error_code = result.get("error").and_then(serde_json::Value::as_i64);
+        if status == 409 || error_code == Some(14) {
+            wait = (wait * 2).min(Duration::from_secs(6));
+            continue;
+        }
+        if let Some(code) = error_code {
+            let message = result
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("erro");
+            let hint = nopecha_error_hint(code);
+            return Err(format!("NopeCHA getToken: {code} {message} {hint}")
+                .trim()
+                .to_string());
+        }
+        if status != 200 {
+            return Err(format!("NopeCHA getToken: HTTP {status} {result}"));
+        }
+        if let Some(token) = result
+            .get("data")
+            .and_then(serde_json::Value::as_str)
+            .filter(|token| !token.trim().is_empty())
+        {
+            return Ok(SolverResult {
+                token: token.trim().to_string(),
+                expiration: Some(120.0),
+                provider: SolverKind::Nopecha.as_str().to_string(),
+            });
+        }
+        wait = (wait * 2).min(Duration::from_secs(6));
+    }
 }
 
 // -- Onyx (HTTP puro) -------------------------------------------------------
@@ -867,6 +1090,9 @@ pub fn solve_with_priority(
             SolverKind::Anticaptcha => {
                 solve_anticaptcha(config, credential, sitekey, site_url)
             }
+            SolverKind::Nopecha => {
+                solve_nopecha(config, credential, sitekey, site_url)
+            }
             SolverKind::Onyx => solve_onyx(
                 &SolverConfig {
                     proxy: credential.proxy.clone(),
@@ -949,6 +1175,47 @@ pub fn ordered_credentials(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maps_nopecha_site_id() {
+        assert_eq!(
+            SolverKind::from_site_id("NopeCHA"),
+            Some(SolverKind::Nopecha)
+        );
+        assert_eq!(
+            SolverKind::from_site_id("nopecha"),
+            Some(SolverKind::Nopecha)
+        );
+        assert_eq!(SolverKind::Nopecha.as_str(), "nopecha");
+    }
+
+    #[test]
+    fn classifies_nopecha_errors() {
+        assert!(nopecha_error_hint(14).contains("andamento"));
+        assert!(nopecha_error_hint(11).contains("créditos"));
+        assert!(nopecha_error_hint(12).contains("plano"));
+        assert!(nopecha_error_hint(10).contains("inválida"));
+        assert_eq!(nopecha_error_hint(99), "");
+    }
+
+    #[test]
+    fn nopecha_requires_key() {
+        let credential = SolverCredential {
+            kind: SolverKind::Nopecha,
+            site_id: "nopecha".into(),
+            label: String::new(),
+            secret: "  ".into(),
+            proxy: String::new(),
+        };
+        let error = solve_nopecha(
+            &SolverConfig::default(),
+            &credential,
+            "sitekey",
+            "https://captcha.muaway.net/",
+        )
+        .unwrap_err();
+        assert!(error.contains("vazia"), "{error}");
+    }
 
     #[test]
     fn maps_only_native_providers() {
